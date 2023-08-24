@@ -13,6 +13,7 @@ import(
 	"github.com/go-playground/validator/v10"
 	"gotut/jwt/database"
 	helper "gotut/jwt/helpers"
+
     "gotut/jwt/models"
     "go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
@@ -102,7 +103,7 @@ func SignUp() gin.HandlerFunc{
         user.Token = &token
         user.Refresh_token = &refreshToken
 		_, insertErr := userCollection.InsertOne(ctx, user)
-        utils.SendEmail(&user, &emailData)
+        utils.SendEmail(&user, &emailData,"verificationCode.html")
          
 
 		if insertErr != nil {
@@ -192,4 +193,110 @@ func Login() gin.HandlerFunc {
 
         c.JSON(http.StatusOK, foundUser)
 	}
+}
+
+func ForgotPassword() gin.HandlerFunc  {
+	return func(c *gin.Context){
+		var ctx,cancel=context.WithTimeout(context.Background(),100*time.Second)
+		var user models.User
+        err := godotenv.Load(".env")
+		configUrl:= os.Getenv("CLIENT_ORIGIN")
+	    if err!= nil{
+		log.Fatal("Error loading .env file")
+
+	    }
+		var userCredential *models.ForgotPasswordInput
+		if err := c.ShouldBindJSON(&userCredential); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"status": "fail", "message": err.Error()})
+			return
+		}
+	
+		message := "You will receive a reset email if user with that email exist"
+		err= userCollection.FindOne(ctx,bson.M{"email":userCredential.Email}).Decode(&user)
+		defer cancel()
+		if err!=nil{
+			
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "No user with this email"})
+            return
+		}
+		if !user.Verified {
+			c.JSON(http.StatusUnauthorized, gin.H{"status": "error", "message": "Account not verified"})
+			return
+		}
+		defer cancel()
+		resetToken := randstr.String(20)
+		update := bson.D{{"$set", bson.D{{"password_reset_token", resetToken}, {"password_reset_at",time.Now().Add(time.Minute * 15)}}}}
+
+		
+        filter := bson.D{{"email", user.Email}}
+		result, err := userCollection.UpdateOne(
+			ctx,
+			filter,
+			update,
+			
+		)
+		if result.MatchedCount == 0 {
+			c.JSON(http.StatusBadGateway, gin.H{"status": "success", "message": "There was an error sending email"})
+			return
+		}
+        if err != nil {
+			c.JSON(http.StatusForbidden, gin.H{"status": "success", "message": err.Error()})
+			return
+		}
+		emailData := utils.EmailData{
+			URL:       configUrl + "/resetpassword/" + resetToken,
+			FirstName: *user.First_name,
+			Subject:   "Your password reset token (valid for 10min)",
+		}
+		utils.SendEmail(&user, &emailData,"resetPassword.html")
+	
+	    c.JSON(http.StatusOK, gin.H{"status": "success", "message": message})
+
+
+	}
+	
+}
+
+func ResetPassword() gin.HandlerFunc  {
+	return func(c *gin.Context){
+		var ctx,cancel=context.WithTimeout(context.Background(),100*time.Second)
+		resetToken := c.Params.ByName("resetToken")
+		var userCredential *models.ResetPasswordInput
+		if err := c.ShouldBindJSON(&userCredential); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"status": "fail", "message": err.Error()})
+			return
+		}
+		defer cancel()
+		if userCredential.Password != userCredential.PasswordConfirm {
+			c.JSON(http.StatusBadRequest, gin.H{"status": "fail", "message": "Passwords do not match"})
+			return
+		}
+		hashedPassword:= HashPassword(userCredential.Password)
+		
+		filter:= bson.D{{"password_reset_token",resetToken}}
+		update := bson.D{{"$set", bson.D{{"password", hashedPassword}}}, {"$unset", bson.D{{"password_reset_token",  ""}, {"password_reset_at",""}}}}
+        
+        result , err := userCollection.UpdateOne(
+			ctx,
+			filter,
+			update,
+			
+		)
+		
+		if result.MatchedCount == 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"status": "success", "message": "Token is invalid or has expired"})
+			return
+		}
+
+		if err != nil {
+			log.Panic(err)
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"status": "success", "message": "Password data updated successfully"})
+
+	
+
+	}
+
+	
 }

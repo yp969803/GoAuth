@@ -21,3 +21,12 @@ type User struct {
     Verified      bool                        `default:"false" json:"verified"` 
 	VerificationCode  string                 `json:"verificationcode"`
 }
+
+type ForgotPasswordInput struct {
+	Email string `json:"email" binding:"required"`
+}
+
+type ResetPasswordInput struct {
+	Password        string `json:"password" binding:"required"`
+	PasswordConfirm string `json:"passwordConfirm" binding:"required"`
+}
